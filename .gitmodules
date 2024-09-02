@@ -1,0 +1,3 @@
+[submodule "MICA-Pausable"]
+	path = deps/MICA-Pausable
+	url = git@github.com:kaplannp/MICA-Pausable.git
