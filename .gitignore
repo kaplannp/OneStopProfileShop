@@ -1,5 +1,6 @@
 Out/
 mica.conf
-*/__pycache__/
+__pycache__/
 *.swp
 Examples/Dummy/main
+deps/IntelPin
