@@ -1,0 +1,5 @@
+Out/
+mica.conf
+*/__pycache__/
+*.swp
+Examples/Dummy/main
