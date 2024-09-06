@@ -155,7 +155,7 @@ class Runner:
         self.logDir = os.path.join(outDir, "Logs")
         self.reportDir = os.path.join(outDir, "Reports")
         self.resultsDir = os.path.join(outDir, "Results")
-        os.mkdir(self.outDir);
+        os.makedirs(self.outDir);
         os.mkdir(self.profileDir);
         os.mkdir(self.kernelOutputDir);
         os.mkdir(self.logDir);
