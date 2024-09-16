@@ -69,17 +69,12 @@ class CacheReportParser:
         with open(dataFile, 'r') as rFile:
             data = rFile.read()
 
-        PREFIX = r"MEM_LOAD_RETIRED\."
-        METRICS = ["L1_HIT", "L1_MISS", "L2_HIT", "L2_MISS", "L3_HIT", "L3_MISS",
-        "FB_HIT"]
+        PREFIX = r"CYCLE_ACTIVITY\.STALLS_"
+        METRICS = ["L1D_MISS", "L2_MISS", "L3_MISS", "TOTAL"]
 
         results = []
         for reQuery in [r"{}({}) *(\d*)".format(PREFIX, metric) for metric in METRICS]:
             results.append(re.search(reQuery, data).groups())
-        results.append(("DRAM_HIT", re.search(
-            r'MEM_LOAD_L3_MISS_RETIRED\.LOCAL_DRAM *(\d*)', data).groups()[0]))
-        results.append(("ALL_LOADS", re.search(
-            r'MEM_INST_RETIRED\.ALL_LOADS *(\d*)', data).groups()[0]))
         return pd.Series({key:val for key, val in results}, dtype=int)
 
     def formatSeriesOut(self, data):
@@ -88,11 +83,13 @@ class CacheReportParser:
         of the series
         '''
         outStr = ""
-        total = data["ALL_LOADS"]
-        data /= total
-        outStr += "total {}\n".format(total)
-        for key, val in data.items():
-            outStr += "{} {}\n".format(key, val)
+        data["L1D_MISS_EXL"] =(data["L1D_MISS"]-data["L2_MISS"]) / data["TOTAL"]
+        data["L2_MISS_EXL"] =(data["L2_MISS"]-data["L3_MISS"]) / data["TOTAL"]
+        data["L3_MISS_EXL"] =data["L3_MISS"] / data["TOTAL"]
+        outStr += "Total_Stalls {}\n".format(data["TOTAL"])
+        outStr += "L1_Miss {}\n".format(data["L1D_MISS_EXL"])
+        outStr += "L2_Miss {}\n".format(data["L2_MISS_EXL"])
+        outStr += "L3_Miss {}\n".format(data["L3_MISS_EXL"])
         return outStr
     
     def parseCacheReport(self, dataFile):
@@ -100,7 +97,6 @@ class CacheReportParser:
         Parses the cache data and returns a string nicely formated of useful
         information
         '''
-        print(self.generateTupleList(dataFile))
         return self.formatSeriesOut(self.generateTupleList(dataFile))
 
 class Runner:
@@ -131,6 +127,7 @@ class Runner:
                 "source/tools/MICA-Pausable/obj-intel64/mica.so")
         self.uarchReportParser = UarchReportParser()
         self.cacheReportParser = CacheReportParser()
+
 
     def setupOutputDir(self, outDir):
         """
@@ -181,16 +178,15 @@ class Runner:
         """
         This is a constant, it's just more readable here. These are the PMU
         events we need to pass to intel. (google intel PMU)
+        Note I've tried of the format MEM_LOAD_RETIRED.L1_HIT, but it didn't
+        seem as reliable.
         """
-        METRICS="MEM_INST_RETIRED.ALL_LOADS,"
-        METRICS+="MEM_LOAD_RETIRED.L1_HIT,"
-        METRICS+="MEM_LOAD_RETIRED.L1_MISS,"
-        METRICS+="MEM_LOAD_RETIRED.FB_HIT,"
-        METRICS+="MEM_LOAD_RETIRED.L2_HIT,"
-        METRICS+="MEM_LOAD_RETIRED.L2_MISS,"
-        METRICS+="MEM_LOAD_RETIRED.L3_HIT,"
-        METRICS+="MEM_LOAD_RETIRED.L3_MISS,"
-        METRICS+="MEM_LOAD_L3_MISS_RETIRED.LOCAL_DRAM,"
+        METRICS="CYCLE_ACTIVITY.STALLS_TOTAL,"
+        METRICS+="CYCLE_ACTIVITY.STALLS_L1D_MISS,"
+        METRICS+="CYCLE_ACTIVITY.STALLS_L2_MISS,"
+        METRICS+="CYCLE_ACTIVITY.STALLS_L3_MISS,"
+        #METRICS+="CYCLE_ACTIVITY.STALLS_MEM_ANY," #this is DRAM. cache exclusive
+
         return METRICS
 
     def getCacheCollectionFlags(self):
@@ -204,10 +200,10 @@ class Runner:
                -knob event-config={} \
                -knob process-kernel-binaries=true \
                -knob stack-size=16384 \
-               -knob max-region-duration=1000 \
                -knob enable-user-tasks=true \
                -finalization-mode=full \
                -knob sampling-interval=.1 \
+               -data-limit=4000 \
                -inline-mode=on".format(METRICS)
         return FLAGS
 
@@ -283,6 +279,37 @@ class Runner:
         with open(os.path.join(self.resultsDir,"vanillaRunTimes.txt"),'w') as wFile:
             for match in matches:
                 wFile.write("{} {}\n".format(match[0], match[1]))
+
+    def runThreadScaling(self, app, nThreads=[1]):
+        '''
+        Runs the app a bunch of times with different number of threads. The app
+        must be instrumented with timers so we can parse the kernel runtime. The
+        list of runtimes will be written to the file
+        resultsDir/threadScaling.txt
+        @param str app: the application to run WITH one {}. This is used directly 
+                        to insert the thread count with a format string. I hope
+                        your application doesn't use {} anywhere else
+        @param list<int> nThreads: the different thread numbers you want to run
+                                   this analysis on
+        '''
+        outputString = ""
+        for threadCnt in nThreads:
+            logFileName = os.path.join(self.logDir,
+                    "threadScaling{}.log".format(threadCnt))
+            #basically executing the app here with some decoration
+            execAndLog("{} 2>&1 | tee {}".format( 
+                app.format(threadCnt),
+                logFileName))
+            with open(logFileName, "r") as iFile:
+                strLog = iFile.read()
+                matches = re.findall(r"zkn kernel time: (\d*us)", strLog)
+                outputString += "{} {}\n".format(threadCnt, matches[0])
+
+        outputFileName = os.path.join(self.resultsDir, "threadScaling.txt")
+        with open(outputFileName, 'w') as oFile:
+            oFile.write(outputString)
+
+
 
 
 
