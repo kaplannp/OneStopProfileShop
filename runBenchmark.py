@@ -2,6 +2,7 @@ import os
 import shutil
 import re
 import pandas as pd
+import tempfile
 
 #root directory. Used so we have paths to other things in this github
 HOME=os.path.dirname(os.path.abspath(__file__))
@@ -166,7 +167,7 @@ class Runner:
         and report in reportDir/uarchSum.txt
         final stats in resultsDir/uarchStats.txt
         '''
-        execAndLog("{} -collect uarch-exploration -knob sampling-interval=.1 -start-paused -data-limit=500 -result-dir {}/Uarch {} 2>&1 | tee {}/uarch.log".format(self.vtune, self.profileDir, app, self.logDir))
+        execAndLog("{} -collect uarch-exploration -knob sampling-interval=.1 -start-paused -data-limit=2500 -result-dir {}/Uarch {} 2>&1 | tee {}/uarch.log".format(self.vtune, self.profileDir, app, self.logDir))
         execAndLog("{} -report summary -inline-mode on -r {}/Uarch -report-output {}/uarchSum.txt".format(self.vtune, self.profileDir, self.reportDir))
         #extract important stats from vtune report and write to the result dir
         stats = self.uarchReportParser.parseUarchReport(
@@ -316,11 +317,24 @@ class Runner:
     def runPinInstrCount(self, app):
         """
         Runs MICA PINtool to count the instructions. It then outputs the 
-        instructions 
+        instructions.
+        Note, an issue with MICA pin is that it only produces files in the cwd.
+        so we create a tmp directory and move the files to the output directory.
+        *THIS REQUIRES THAT APP PATH IS ABSOLUTE*
         """
+        #init final ouput directories
         micaOut=os.path.join(self.profileDir, "Mica")
         os.mkdir(micaOut)
         useExistingConf = os.path.isfile("mica.conf")
+
+        #push cwd to find your way back, and make a tmp output dir to run thepin
+        cwd = os.getcwd()
+        workingDir = micaOut
+        #copy the conf from here if it exists
+        if useExistingConf:
+            shutil.copy("mica.conf", os.path.join(workingDir, "mica.conf"))
+
+        os.chdir(workingDir)
         #make a new conf if you need
         if not useExistingConf:
             with open("mica.conf", 'w') as ofile:
@@ -331,24 +345,23 @@ class Runner:
         execAndLog("{} -t {} -- {}".format(self.pin, self.micaLib, app))
         # parse the cryptic mica file to get the outputs
         self.formatMicaOutput()
-        #move all the outputs
-        os.rename("itypes_full_int_pin.out",
-                os.path.join(micaOut,"itypes_full_int_pin.out"))
-        os.rename("itypes_other_group_categories.txt",
-                os.path.join(micaOut,"itypes_other_group_categories.txt"))
-        os.rename("mica.log",
-                os.path.join(micaOut,"mica.log"))
-        #these I think are only produced on error, so probably not needed
-        #os.rename("pin.log",
-        #        os.path.join(micaOut,"pin.log"))
-        #os.rename("mica_progress.txt", 
-        #        os.path.join(micaOut,"mica_progress.txt"))
-        os.rename("instrCounts.txt", 
-                os.path.join(micaOut,"instrCounts.txt"))
-        shutil.copy("mica.conf", os.path.join(micaOut,"mica.conf"))
-        #if we made the conf file, delete it on exit to be clean
-        if useExistingConf:
-            os.remove("mica.conf")
+
+        #Pin has run successfully! Now we return to cwd and move the outputs
+        os.chdir(cwd)
+        #move all the outputs. These days we use working dir, so don't need to
+        #os.rename(os.path.join(tempDir.name, "itypes_full_int_pin.out"),
+        #        os.path.join(micaOut,"itypes_full_int_pin.out"))
+        #os.rename(
+        #        os.path.join(tempDir.name, "itypes_other_group_categories.txt"),
+        #        os.path.join(micaOut,"itypes_other_group_categories.txt"))
+        #os.rename(os.path.join(tempDir.name, "mica.log"),
+        #        os.path.join(micaOut,"mica.log"))
+        #os.rename(os.path.join(tempDir.name, "instrCounts.txt"), 
+        #        os.path.join(micaOut,"instrCounts.txt"))
+        #shutil.copy(os.path.join(tempDir.name, "mica.conf"), 
+        #        os.path.join(micaOut,"mica.conf"))
+        #outputs are moved, now we clean the tempDir
+        #os.remove(tempDir.name)
         #copy the instruction counts to results
         shutil.copy(os.path.join(micaOut,"instrCounts.txt"), 
                 os.path.join(self.resultsDir, "instrCounts.txt"))
