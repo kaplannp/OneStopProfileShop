@@ -244,8 +244,8 @@ class Runner:
         with open("itypes_full_int_pin.out", 'r') as iFile:
             data = iFile.read().split(" ")
             with open("instrCounts.txt", 'w') as oFile:
-                countNames = ["Count", "Memory", "Control", "Scalar", 
-                         "FpScalar", "Nop", "Register", "Vector"]
+              countNames = ["Count", "Nop", "Memory", "FpScalar", 
+                       "Vector", "Ctrl", "Register", "Scalar", "Other"]
                 total = 0;
                 for name, val in zip(countNames, data[:len(countNames)]):
                     if (name == "Count"):
