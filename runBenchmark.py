@@ -80,6 +80,8 @@ class CacheReportParser:
             r'MEM_LOAD_L3_MISS_RETIRED\.LOCAL_DRAM *(\d*)', data).groups()[0]))
         results.append(("ALL_LOADS", re.search(
             r'MEM_INST_RETIRED\.ALL_LOADS *(\d*)', data).groups()[0]))
+        results.append(("DYN_INST_CNT", re.search(
+            r'\nINST_RETIRED\.ANY *(\d*)', data).groups()[0]))
         return pd.Series({key:val for key, val in results}, dtype=int)
 
     def formatSeriesOut(self, data):
@@ -88,9 +90,46 @@ class CacheReportParser:
         of the series
         '''
         outStr = ""
-        total = data["ALL_LOADS"]
+        for key, val in data.items():
+            outStr += "{} {}\n".format(key, val)
+        return outStr
+    
+    def parseCacheReport(self, dataFile):
+        '''
+        Parses the cache data and returns a string nicely formated of useful
+        information
+        '''
+        print(self.generateTupleList(dataFile))
+        return self.formatSeriesOut(self.generateTupleList(dataFile))
+
+class CacheStallReportParser:
+    '''
+    Guess what?! I had need to extend the spaghetti code. This one is for cache
+    stalls.
+    '''
+    def generateTupleList(self, dataFile):
+        data = ""
+
+        with open(dataFile, 'r') as rFile:
+            data = rFile.read()
+
+        PREFIX = r"CYCLE_ACTIVITY\.STALLS_"
+        METRICS = ["L1D_MISS", "L2_MISS", "L3_MISS", "TOTAL"]
+
+        results = []
+        for reQuery in [r"{}({}) *(\d*)".format(PREFIX, metric) for metric in METRICS]:
+            results.append(re.search(reQuery, data).groups())
+        return pd.Series({key:val for key, val in results}, dtype=int)
+
+    def formatSeriesOut(self, data):
+        '''
+        formats the tuple list output of generateTupleList. Might be destructive
+        of the series
+        '''
+        total = data["TOTAL"]
         data /= total
-        outStr += "total {}\n".format(total)
+        outStr = ""
+        outStr += "TOTAL_STALLS {}\n".format(total)
         for key, val in data.items():
             outStr += "{} {}\n".format(key, val)
         return outStr
@@ -131,6 +170,7 @@ class Runner:
                 "source/tools/MICA-Pausable/obj-intel64/mica.so")
         self.uarchReportParser = UarchReportParser()
         self.cacheReportParser = CacheReportParser()
+        self.cacheStallReportParser = CacheStallReportParser()
 
     def setupOutputDir(self, outDir):
         """
@@ -191,6 +231,7 @@ class Runner:
         METRICS+="MEM_LOAD_RETIRED.L3_HIT,"
         METRICS+="MEM_LOAD_RETIRED.L3_MISS,"
         METRICS+="MEM_LOAD_L3_MISS_RETIRED.LOCAL_DRAM,"
+        METRICS+="INST_RETIRED.ANY"
         return METRICS
 
     def getCacheCollectionFlags(self):
@@ -215,6 +256,8 @@ class Runner:
         """
         runs vtune profiling to collect cache statistics in profileDir/Cache
         log in logDir/cache.log
+        There is another type of analysis which gets stalls, but this one gets
+        the counts of cache misses/hits per instruction
         report in reportDir/cachSum.txt
         final stats in resultsDir/cacheStats.txt
         """
@@ -235,6 +278,57 @@ class Runner:
         stats = self.cacheReportParser.parseCacheReport(
                 os.path.join(self.reportDir,"cacheSum.txt"))
         with open(os.path.join(self.resultsDir, "cacheStats.txt"),'w') as oFile:
+            oFile.write(stats);
+
+    def getCacheStallFlags(self):
+        """
+        This is a constant, it's just more readable here. These are flags for a
+        cache analysis
+        """
+        METRICS= "CYCLE_ACTIVITY.STALLS_L1D_MISS"
+        METRICS+=",CYCLE_ACTIVITY.STALLS_L2_MISS"
+        METRICS+=",CYCLE_ACTIVITY.STALLS_L3_MISS"
+        METRICS+=",CYCLE_ACTIVITY.STALLS_TOTAL"
+        FLAGS="-collect-with runsa \
+               -start-paused \
+               -knob event-config={} \
+               -knob process-kernel-binaries=true \
+               -knob stack-size=16384 \
+               -knob max-region-duration=1000 \
+               -knob enable-user-tasks=true \
+               -finalization-mode=full \
+               -knob sampling-interval=.1 \
+               -inline-mode=on".format(METRICS)
+        return FLAGS
+
+    def runVtuneCacheStall(self, app):
+        """
+        runs vtune profiling to collect cache statistics in
+        profileDir/CacheStalls
+        log in logDir/cacheStall.log. The difference between this and the other 
+        cache collection is that this one collects cycles when there was a stall
+        and a cache miss at the same time.
+        report in reportDir/cacheStallSum.txt
+        final stats in resultsDir/cacheStallStats.txt
+        """
+        FLAGS=self.getCacheStallFlags()
+        #run the profiling
+        execAndLog("{} {} -result-dir {} {} 2>&1 | tee {}".format(
+                        self.vtune,
+                        FLAGS,
+                        os.path.join(self.profileDir, "CacheStall"),
+                        app,
+                        os.path.join(self.logDir, "cacheStall.log")))
+        #generate a report summary. Note, I've tried -report output, for some
+        #reason only > works
+        execAndLog("{} -report summary -r {} > {}".format(
+                self.vtune, 
+                os.path.join(self.profileDir, "CacheStall"),
+                os.path.join(self.reportDir, "cacheStallSum.txt")))
+        stats = self.cacheStallReportParser.parseCacheReport(
+                os.path.join(self.reportDir,"cacheStallSum.txt"))
+        with open(os.path.join(self.resultsDir, "cacheStallStats.txt"),
+                  'w') as oFile:
             oFile.write(stats);
 
     
