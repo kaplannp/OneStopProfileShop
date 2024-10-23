@@ -2,6 +2,7 @@ import os
 import shutil
 import re
 import pandas as pd
+import tempfile
 
 #root directory. Used so we have paths to other things in this github
 HOME=os.path.dirname(os.path.abspath(__file__))
@@ -70,14 +71,11 @@ class CacheReportParser:
             data = rFile.read()
 
         PREFIX = r"MEM_LOAD_RETIRED\."
-        METRICS = ["L1_HIT", "L1_MISS", "L2_HIT", "L2_MISS", "L3_HIT", "L3_MISS",
-        "FB_HIT"]
+        METRICS = ["L1_MISS","L2_MISS","L3_MISS"]
 
         results = []
         for reQuery in [r"{}({}) *(\d*)".format(PREFIX, metric) for metric in METRICS]:
             results.append(re.search(reQuery, data).groups())
-        results.append(("DRAM_HIT", re.search(
-            r'MEM_LOAD_L3_MISS_RETIRED\.LOCAL_DRAM *(\d*)', data).groups()[0]))
         results.append(("ALL_LOADS", re.search(
             r'MEM_INST_RETIRED\.ALL_LOADS *(\d*)', data).groups()[0]))
         results.append(("DYN_INST_CNT", re.search(
@@ -89,9 +87,14 @@ class CacheReportParser:
         formats the tuple list output of generateTupleList. Might be destructive
         of the series
         '''
+        data["L1_MISS_EXL"] =(data["L1_MISS"]-data["L2_MISS"])
+        data["L2_MISS_EXL"] =(data["L2_MISS"]-data["L3_MISS"])
+        data["L3_MISS_EXL"] =data["L3_MISS"]
         outStr = ""
-        for key, val in data.items():
-            outStr += "{} {}\n".format(key, val)
+        outStr += "DYN_INST_CNT {}\n".format(data["DYN_INST_CNT"])
+        outStr += "L1_MISS {}\n".format(data["L1_MISS_EXL"])
+        outStr += "L2_MISS {}\n".format(data["L2_MISS_EXL"])
+        outStr += "L3_MISS {}\n".format(data["L3_MISS_EXL"])
         return outStr
     
     def parseCacheReport(self, dataFile):
@@ -102,10 +105,10 @@ class CacheReportParser:
         print(self.generateTupleList(dataFile))
         return self.formatSeriesOut(self.generateTupleList(dataFile))
 
+
 class CacheStallReportParser:
     '''
-    Guess what?! I had need to extend the spaghetti code. This one is for cache
-    stalls.
+    This one is spaghetti code, sorry. It should work though. 
     '''
     def generateTupleList(self, dataFile):
         data = ""
@@ -126,12 +129,14 @@ class CacheStallReportParser:
         formats the tuple list output of generateTupleList. Might be destructive
         of the series
         '''
-        total = data["TOTAL"]
-        data /= total
         outStr = ""
-        outStr += "TOTAL_STALLS {}\n".format(total)
-        for key, val in data.items():
-            outStr += "{} {}\n".format(key, val)
+        data["L1D_MISS_EXL"] =(data["L1D_MISS"]-data["L2_MISS"]) / data["TOTAL"]
+        data["L2_MISS_EXL"] =(data["L2_MISS"]-data["L3_MISS"]) / data["TOTAL"]
+        data["L3_MISS_EXL"] =data["L3_MISS"] / data["TOTAL"]
+        outStr += "TOTAL_STALLS {}\n".format(data["TOTAL"])
+        outStr += "L1_MISS {}\n".format(data["L1D_MISS_EXL"])
+        outStr += "L2_MISS {}\n".format(data["L2_MISS_EXL"])
+        outStr += "L3_MISS {}\n".format(data["L3_MISS_EXL"])
         return outStr
     
     def parseCacheReport(self, dataFile):
@@ -139,7 +144,6 @@ class CacheStallReportParser:
         Parses the cache data and returns a string nicely formated of useful
         information
         '''
-        print(self.generateTupleList(dataFile))
         return self.formatSeriesOut(self.generateTupleList(dataFile))
 
 class Runner:
@@ -172,6 +176,7 @@ class Runner:
         self.cacheReportParser = CacheReportParser()
         self.cacheStallReportParser = CacheStallReportParser()
 
+
     def setupOutputDir(self, outDir):
         """
         @param the ouput directory
@@ -195,7 +200,7 @@ class Runner:
         self.logDir = os.path.join(outDir, "Logs")
         self.reportDir = os.path.join(outDir, "Reports")
         self.resultsDir = os.path.join(outDir, "Results")
-        os.mkdir(self.outDir);
+        os.makedirs(self.outDir);
         os.mkdir(self.profileDir);
         os.mkdir(self.kernelOutputDir);
         os.mkdir(self.logDir);
@@ -209,7 +214,7 @@ class Runner:
         and report in reportDir/uarchSum.txt
         final stats in resultsDir/uarchStats.txt
         '''
-        execAndLog("{} -collect uarch-exploration -knob sampling-interval=.1 -start-paused -data-limit=500 -result-dir {}/Uarch {} 2>&1 | tee {}/uarch.log".format(self.vtune, self.profileDir, app, self.logDir))
+        execAndLog("{} -collect uarch-exploration -knob sampling-interval=.1 -start-paused -data-limit=2500 -result-dir {}/Uarch {} 2>&1 | tee {}/uarch.log".format(self.vtune, self.profileDir, app, self.logDir))
         execAndLog("{} -report summary -inline-mode on -r {}/Uarch -report-output {}/uarchSum.txt".format(self.vtune, self.profileDir, self.reportDir))
         #extract important stats from vtune report and write to the result dir
         stats = self.uarchReportParser.parseUarchReport(
@@ -223,14 +228,10 @@ class Runner:
         events we need to pass to intel. (google intel PMU)
         """
         METRICS="MEM_INST_RETIRED.ALL_LOADS,"
-        METRICS+="MEM_LOAD_RETIRED.L1_HIT,"
         METRICS+="MEM_LOAD_RETIRED.L1_MISS,"
-        METRICS+="MEM_LOAD_RETIRED.FB_HIT,"
-        METRICS+="MEM_LOAD_RETIRED.L2_HIT,"
         METRICS+="MEM_LOAD_RETIRED.L2_MISS,"
-        METRICS+="MEM_LOAD_RETIRED.L3_HIT,"
         METRICS+="MEM_LOAD_RETIRED.L3_MISS,"
-        METRICS+="MEM_LOAD_L3_MISS_RETIRED.LOCAL_DRAM,"
+        #METRICS+="MEM_LOAD_L3_MISS_RETIRED.LOCAL_DRAM,"
         METRICS+="INST_RETIRED.ANY"
         return METRICS
 
@@ -245,10 +246,10 @@ class Runner:
                -knob event-config={} \
                -knob process-kernel-binaries=true \
                -knob stack-size=16384 \
-               -knob max-region-duration=1000 \
                -knob enable-user-tasks=true \
                -finalization-mode=full \
                -knob sampling-interval=.1 \
+               -data-limit=4000 \
                -inline-mode=on".format(METRICS)
         return FLAGS
 
@@ -285,10 +286,11 @@ class Runner:
         This is a constant, it's just more readable here. These are flags for a
         cache analysis
         """
-        METRICS= "CYCLE_ACTIVITY.STALLS_L1D_MISS"
-        METRICS+=",CYCLE_ACTIVITY.STALLS_L2_MISS"
-        METRICS+=",CYCLE_ACTIVITY.STALLS_L3_MISS"
-        METRICS+=",CYCLE_ACTIVITY.STALLS_TOTAL"
+        METRICS="CYCLE_ACTIVITY.STALLS_TOTAL,"
+        METRICS+="CYCLE_ACTIVITY.STALLS_L1D_MISS,"
+        METRICS+="CYCLE_ACTIVITY.STALLS_L2_MISS,"
+        METRICS+="CYCLE_ACTIVITY.STALLS_L3_MISS,"
+        #METRICS+="CYCLE_ACTIVITY.STALLS_MEM_ANY," #this is DRAM. cache exclusive
         FLAGS="-collect-with runsa \
                -start-paused \
                -knob event-config={} \
@@ -341,8 +343,8 @@ class Runner:
         with open("itypes_full_int_pin.out", 'r') as iFile:
             data = iFile.read().split(" ")
             with open("instrCounts.txt", 'w') as oFile:
-                countNames = ["Count", "Memory", "Control", "Scalar", 
-                         "FpScalar", "Nop", "Register", "Vector"]
+                countNames = ["Count", "Nop", "Memory", "FpScalar", 
+                       "Vector", "Ctrl", "Register", "Scalar", "Other"]
                 total = 0;
                 for name, val in zip(countNames, data[:len(countNames)]):
                     if (name == "Count"):
@@ -378,16 +380,60 @@ class Runner:
             for match in matches:
                 wFile.write("{} {}\n".format(match[0], match[1]))
 
+    def runThreadScaling(self, app, nThreads=[1]):
+        '''
+        Runs the app a bunch of times with different number of threads. The app
+        must be instrumented with timers so we can parse the kernel runtime. The
+        list of runtimes will be written to the file
+        resultsDir/threadScaling.txt
+        @param str app: the application to run WITH one {}. This is used directly 
+                        to insert the thread count with a format string. I hope
+                        your application doesn't use {} anywhere else
+        @param list<int> nThreads: the different thread numbers you want to run
+                                   this analysis on
+        '''
+        outputString = ""
+        for threadCnt in nThreads:
+            logFileName = os.path.join(self.logDir,
+                    "threadScaling{}.log".format(threadCnt))
+            #basically executing the app here with some decoration
+            execAndLog("{} 2>&1 | tee {}".format( 
+                app.format(threadCnt),
+                logFileName))
+            with open(logFileName, "r") as iFile:
+                strLog = iFile.read()
+                matches = re.findall(r"zkn kernel time: (\d*us)", strLog)
+                outputString += "{} {}\n".format(threadCnt, matches[0])
+
+        outputFileName = os.path.join(self.resultsDir, "threadScaling.txt")
+        with open(outputFileName, 'w') as oFile:
+            oFile.write(outputString)
+
+
+
 
 
     def runPinInstrCount(self, app):
         """
         Runs MICA PINtool to count the instructions. It then outputs the 
-        instructions 
+        instructions.
+        Note, an issue with MICA pin is that it only produces files in the cwd.
+        so we create a tmp directory and move the files to the output directory.
+        *THIS REQUIRES THAT APP PATH IS ABSOLUTE*
         """
+        #init final ouput directories
         micaOut=os.path.join(self.profileDir, "Mica")
         os.mkdir(micaOut)
         useExistingConf = os.path.isfile("mica.conf")
+
+        #push cwd to find your way back, and make a tmp output dir to run thepin
+        cwd = os.getcwd()
+        workingDir = micaOut
+        #copy the conf from here if it exists
+        if useExistingConf:
+            shutil.copy("mica.conf", os.path.join(workingDir, "mica.conf"))
+
+        os.chdir(workingDir)
         #make a new conf if you need
         if not useExistingConf:
             with open("mica.conf", 'w') as ofile:
@@ -398,24 +444,9 @@ class Runner:
         execAndLog("{} -t {} -- {}".format(self.pin, self.micaLib, app))
         # parse the cryptic mica file to get the outputs
         self.formatMicaOutput()
-        #move all the outputs
-        os.rename("itypes_full_int_pin.out",
-                os.path.join(micaOut,"itypes_full_int_pin.out"))
-        os.rename("itypes_other_group_categories.txt",
-                os.path.join(micaOut,"itypes_other_group_categories.txt"))
-        os.rename("mica.log",
-                os.path.join(micaOut,"mica.log"))
-        #these I think are only produced on error, so probably not needed
-        #os.rename("pin.log",
-        #        os.path.join(micaOut,"pin.log"))
-        #os.rename("mica_progress.txt", 
-        #        os.path.join(micaOut,"mica_progress.txt"))
-        os.rename("instrCounts.txt", 
-                os.path.join(micaOut,"instrCounts.txt"))
-        shutil.copy("mica.conf", os.path.join(micaOut,"mica.conf"))
-        #if we made the conf file, delete it on exit to be clean
-        if useExistingConf:
-            os.remove("mica.conf")
+
+        #Pin has run successfully! Now we return to cwd and move the outputs
+        os.chdir(cwd)
         #copy the instruction counts to results
         shutil.copy(os.path.join(micaOut,"instrCounts.txt"), 
                 os.path.join(self.resultsDir, "instrCounts.txt"))
