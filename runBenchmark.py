@@ -214,7 +214,7 @@ class Runner:
         and report in reportDir/uarchSum.txt
         final stats in resultsDir/uarchStats.txt
         '''
-        execAndLog("{} -collect uarch-exploration -knob sampling-interval=.1 -start-paused -data-limit=2500 -result-dir {}/Uarch {} 2>&1 | tee {}/uarch.log".format(self.vtune, self.profileDir, app, self.logDir))
+        execAndLog("{} -collect uarch-exploration -knob sampling-interval=.1 -start-paused -data-limit=15000 -result-dir {}/Uarch {} 2>&1 | tee {}/uarch.log".format(self.vtune, self.profileDir, app, self.logDir))
         execAndLog("{} -report summary -inline-mode on -r {}/Uarch -report-output {}/uarchSum.txt".format(self.vtune, self.profileDir, self.reportDir))
         #extract important stats from vtune report and write to the result dir
         stats = self.uarchReportParser.parseUarchReport(
@@ -249,7 +249,7 @@ class Runner:
                -knob enable-user-tasks=true \
                -finalization-mode=full \
                -knob sampling-interval=.1 \
-               -data-limit=4000 \
+               -data-limit=15000 \
                -inline-mode=on".format(METRICS)
         return FLAGS
 
@@ -343,7 +343,7 @@ class Runner:
         with open("itypes_full_int_pin.out", 'r') as iFile:
             data = iFile.read().split(" ")
             with open("instrCounts.txt", 'w') as oFile:
-                countNames = ["Count", "Nop", "Memory", "FpScalar", 
+                countNames = ["Count", "Nop", "VecMemory", "Memory", "FpScalar", 
                        "Vector", "Ctrl", "Register", "Scalar", "Other"]
                 total = 0;
                 for name, val in zip(countNames, data[:len(countNames)]):
