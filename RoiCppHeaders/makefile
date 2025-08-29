@@ -13,7 +13,8 @@ all: $(LIB_DIR)/lib$(LIB_TARGET)
 $(LIB_DIR)/lib%.a: $(OBJ_DIR)/%.o
 	ar rvs $@ $<
 
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.cpp 
+	mkdir -p $(OBJ_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDE_FLAGS) -c -o $@ $<
 
 clean:
